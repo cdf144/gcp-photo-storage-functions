@@ -41,10 +41,11 @@ def upload_image(request: Request) -> Union[Response, Tuple[str, int]]:
     if image_file.mimetype not in allowed_types:
         return (f"Unsupported file type {image_file.mimetype}", 415)
 
-    filename: str = image_file.filename or "uploaded_file"
-    safe_filename: str = secure_filename(filename)
+    filename = image_file.filename or "uploaded_file"
+    safe_filename = secure_filename(filename)
 
-    destination_blob_name: str = f"uploads/{safe_filename}"
+    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    destination_blob_name = f"uploads/{timestamp}_{safe_filename}"
 
     try:
         bucket = storage_client.get_bucket(bucket_name)
