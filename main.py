@@ -5,19 +5,17 @@ from typing import Any, Tuple, Union
 
 import functions_framework
 from flask import Request, Response, jsonify
-from google.cloud import firestore, storage, vision
+from google.cloud import firestore, vision
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
 import utils
-
-FIRESTORE_COLLECTION = "image_metadata"
-BUCKET_SIGNED_URL_EXPIRATION = datetime.timedelta(minutes=15)
-
-storage_client = storage.Client()
-vision_client = vision.ImageAnnotatorClient()
-firestore_client = firestore.Client(
-    database=os.environ.get("FIRESTORE_DATABASE", "(default)"),
+from config import (
+    BUCKET_SIGNED_URL_EXPIRATION,
+    FIRESTORE_COLLECTION,
+    firestore_client,
+    storage_client,
+    vision_client,
 )
 
 
