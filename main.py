@@ -228,3 +228,62 @@ def get_images_metadata(_: Request) -> Response | Tuple[str, int]:
         return jsonify(
             {"error": "An internal error occurred while fetching image data."}
         ), 500
+
+
+@functions_framework.http
+def get_image_metadata(request: Request) -> Response | Tuple[str, int]:
+    """
+    HTTP Cloud Run function to retrieve metadata for a specific image
+    from Firestore based on the provided 'doc_id' query parameter.
+
+    Expects a query parameter 'doc_id' in the request URL.
+
+    Returns a JSON response containing the image metadata.
+    """
+    doc_id: str | None = request.args.get("doc_id")
+
+    if not doc_id:
+        return ("Bad Request: Missing 'doc_id' query parameter.", 400)
+
+    try:
+        doc_ref: firestore.DocumentReference = firestore_client.collection(
+            FIRESTORE_COLLECTION
+        ).document(doc_id)
+        doc = doc_ref.get()
+
+        if not doc.exists:
+            return ("Not Found: Document does not exist.", 404)
+
+        metadata = doc.to_dict()
+
+        # Generate signed URL for the image
+        file_name: str | None = metadata.get("fileName")
+        bucket_name: str | None = metadata.get("bucket")
+        if not file_name or not bucket_name:
+            return ("Bad Request: Missing fileName or bucket in metadata.", 400)
+
+        signed_url: str | None = None
+        try:
+            bucket = storage_client.get_bucket(bucket_name)
+            blob = bucket.blob(file_name)
+
+            credentials = utils.get_impersonated_credentials()
+            signed_url = blob.generate_signed_url(
+                expiration=BUCKET_SIGNED_URL_EXPIRATION,
+                credentials=credentials,
+                version="v4",
+            )
+
+        except Exception as e:
+            print(f"Error generating signed URL for {file_name}: {e}")
+
+        finally:
+            metadata["signedUrl"] = signed_url
+
+        metadata["id"] = doc_id
+
+        return jsonify(metadata), 200
+
+    except Exception as e:
+        print(f"An error occurred while retrieving metadata for {doc_id}: {e}")
+        return ("An internal error occurred while fetching image data.", 500)

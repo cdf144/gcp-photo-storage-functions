@@ -25,3 +25,12 @@ gcloud run deploy get-images-metadata-function \
   --set-env-vars FIRESTORE_DATABASE="photo-cloud-storage-firestore" \
   --set-env-vars BUCKET_NAME="photo-cloud-storage-bucket-1" \
   --allow-unauthenticated
+
+gcloud run deploy get-image-metadata-function \
+  --source . \
+  --base-image python313 \
+  --region asia-southeast1 \
+  --function get_image_metadata \
+  --set-env-vars FIRESTORE_DATABASE="photo-cloud-storage-firestore" \
+  --set-env-vars BUCKET_NAME="photo-cloud-storage-bucket-1" \
+  --allow-unauthenticated
