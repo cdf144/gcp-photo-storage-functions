@@ -130,13 +130,14 @@ def get_images_metadata(_: Request) -> Response | Tuple[str, int]:
                 }
             )
 
-        return jsonify(images_data), HTTPStatus.OK
+        return jsonify(images_data)
 
     except Exception as e:
         print(f"An error occurred while retrieving metadata: {e}")
-        return jsonify(
-            {"error": "An internal error occurred while fetching image data."}
-        ), HTTPStatus.INTERNAL_SERVER_ERROR
+        return (
+            "An internal error occurred while fetching image data.",
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
 
 
 @functions_framework.http
@@ -198,7 +199,7 @@ def get_image_metadata(request: Request) -> Response | Tuple[str, int]:
 
         metadata["id"] = doc_id
 
-        return jsonify(metadata), HTTPStatus.OK
+        return jsonify(metadata)
 
     except Exception as e:
         print(f"An error occurred while retrieving metadata for {doc_id}: {e}")
