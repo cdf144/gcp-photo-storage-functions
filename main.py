@@ -1,5 +1,6 @@
 import datetime
 import os
+from http import HTTPStatus
 from typing import Any, Tuple, Union
 
 import functions_framework
@@ -33,16 +34,22 @@ def upload_image(request: Request) -> Response | Tuple[str, int]:
     bucket_name: str = os.environ.get("BUCKET_NAME", "")
     if not bucket_name:
         print("Error: BUCKET_NAME environment variable is not set.")
-        return ("Server configuration error.", 500)
+        return ("Server configuration error.", HTTPStatus.INTERNAL_SERVER_ERROR)
 
     image_file: Union[FileStorage, None] = request.files.get("image")
 
     if not image_file:
-        return ("Bad Request: Missing 'image' field in the request.", 400)
+        return (
+            "Bad Request: Missing 'image' field in the request.",
+            HTTPStatus.BAD_REQUEST,
+        )
 
     allowed_types = ["image/jpeg", "image/png", "image/gif"]
     if image_file.mimetype not in allowed_types:
-        return (f"Unsupported file type {image_file.mimetype}", 415)
+        return (
+            f"Unsupported file type {image_file.mimetype}",
+            HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+        )
 
     filename = image_file.filename or "uploaded_file"
     safe_filename = secure_filename(filename)
@@ -58,12 +65,15 @@ def upload_image(request: Request) -> Response | Tuple[str, int]:
 
         return (
             f"File '{filename}' uploaded successfully as '{destination_blob_name}'.",
-            201,
+            HTTPStatus.CREATED,
         )
 
     except Exception as e:
         print(f"An error occurred during upload: {e}")
-        return ("An error occurred during file upload.", 500)
+        return (
+            "An error occurred during file upload.",
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
 
 
 @functions_framework.cloud_event
@@ -221,13 +231,13 @@ def get_images_metadata(_: Request) -> Response | Tuple[str, int]:
                 }
             )
 
-        return jsonify(images_data), 200
+        return jsonify(images_data), HTTPStatus.OK
 
     except Exception as e:
         print(f"An error occurred while retrieving metadata: {e}")
         return jsonify(
             {"error": "An internal error occurred while fetching image data."}
-        ), 500
+        ), HTTPStatus.INTERNAL_SERVER_ERROR
 
 
 @functions_framework.http
@@ -243,7 +253,10 @@ def get_image_metadata(request: Request) -> Response | Tuple[str, int]:
     doc_id: str | None = request.args.get("doc_id")
 
     if not doc_id:
-        return ("Bad Request: Missing 'doc_id' query parameter.", 400)
+        return (
+            "Bad Request: Missing 'doc_id' query parameter.",
+            HTTPStatus.BAD_REQUEST,
+        )
 
     try:
         doc_ref: firestore.DocumentReference = firestore_client.collection(
@@ -252,7 +265,7 @@ def get_image_metadata(request: Request) -> Response | Tuple[str, int]:
         doc = doc_ref.get()
 
         if not doc.exists:
-            return ("Not Found: Document does not exist.", 404)
+            return ("Document does not exist.", HTTPStatus.NOT_FOUND)
 
         metadata = doc.to_dict()
 
@@ -260,7 +273,11 @@ def get_image_metadata(request: Request) -> Response | Tuple[str, int]:
         file_name: str | None = metadata.get("fileName")
         bucket_name: str | None = metadata.get("bucket")
         if not file_name or not bucket_name:
-            return ("Bad Request: Missing fileName or bucket in metadata.", 400)
+            print(f"Error: Document '{doc_id}' is missing fileName or bucket.")
+            return (
+                "The document stored on the server has incomplete metadata.",
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
 
         signed_url: str | None = None
         try:
@@ -282,8 +299,11 @@ def get_image_metadata(request: Request) -> Response | Tuple[str, int]:
 
         metadata["id"] = doc_id
 
-        return jsonify(metadata), 200
+        return jsonify(metadata), HTTPStatus.OK
 
     except Exception as e:
         print(f"An error occurred while retrieving metadata for {doc_id}: {e}")
-        return ("An internal error occurred while fetching image data.", 500)
+        return (
+            "An internal error occurred while fetching image data.",
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
