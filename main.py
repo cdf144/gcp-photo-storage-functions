@@ -3,12 +3,15 @@ import os
 from typing import Any, Tuple, Union
 
 import functions_framework
-from flask import Request, Response
+from flask import Request, Response, jsonify
 from google.cloud import firestore, storage, vision
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
+import utils
+
 FIRESTORE_COLLECTION = "image_metadata"
+BUCKET_SIGNED_URL_EXPIRATION = datetime.timedelta(minutes=15)
 
 storage_client = storage.Client()
 vision_client = vision.ImageAnnotatorClient()
@@ -18,7 +21,7 @@ firestore_client = firestore.Client(
 
 
 @functions_framework.http
-def upload_image(request: Request) -> Union[Response, Tuple[str, int]]:
+def upload_image(request: Request) -> Response | Tuple[str, int]:
     """
     HTTP Cloud Run function to receive an image via POST request
     (multipart/form-data) and upload it to Cloud Storage.
@@ -160,3 +163,68 @@ def process_image_for_labels(cloud_event: functions_framework.CloudEvent) -> Non
 
     except Exception as e:
         print(f"An error occurred while saving to Firestore: {e}")
+
+
+@functions_framework.http
+def get_images_metadata(_: Request) -> Response | Tuple[str, int]:
+    """
+    HTTP Cloud Run function to retrieve image metadata and labels from Firestore
+    and generate signed URLs for corresponding images in Cloud Storage.
+
+    Returns a JSON response containing a list of image metadata objects.
+    """
+    images_data: list[dict[str, Any]] = []
+
+    try:
+        docs = firestore_client.collection(FIRESTORE_COLLECTION).stream()
+
+        for doc in docs:
+            metadata = doc.to_dict()
+            doc_id = doc.id
+
+            file_name: str | None = metadata.get("fileName")
+            bucket_name: str | None = metadata.get("bucket")
+            labels: list[dict[str, Union[str, float]]] = metadata.get("labels", [])
+
+            if not file_name or not bucket_name:
+                print(
+                    f"Warning: Skipping document '{doc_id}' due to missing fileName or bucket."
+                )
+                continue
+
+            # Signed URLs give time-limited access to files in Cloud Storage without making them public.
+            # Info: https://cloud.google.com/storage/docs/access-control/signed-urls
+            signed_url: str | None = None
+            try:
+                bucket = storage_client.get_bucket(bucket_name)
+                blob = bucket.blob(file_name)
+
+                credentials = utils.get_impersonated_credentials()
+                signed_url = blob.generate_signed_url(
+                    expiration=BUCKET_SIGNED_URL_EXPIRATION,
+                    credentials=credentials,
+                    version="v4",
+                )
+
+            except Exception as e:
+                print(f"Error generating signed URL for {file_name}: {e}")
+
+            images_data.append(
+                {
+                    "id": doc_id,
+                    "fileName": file_name,
+                    "labels": labels,
+                    "signedUrl": signed_url,
+                    "processedTimestamp": metadata.get("processedTimestamp"),
+                    "timeCreated": metadata.get("timeCreated"),
+                    "size": metadata.get("size"),
+                }
+            )
+
+        return jsonify(images_data), 200
+
+    except Exception as e:
+        print(f"An error occurred while retrieving metadata: {e}")
+        return jsonify(
+            {"error": "An internal error occurred while fetching image data."}
+        ), 500
