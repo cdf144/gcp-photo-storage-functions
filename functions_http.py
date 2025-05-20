@@ -3,6 +3,9 @@ import os
 from http import HTTPStatus
 from typing import Any, Tuple, Union
 
+import firebase_admin
+from firebase_admin import auth, credentials
+
 import functions_framework
 from flask import Request, Response, jsonify
 from google.cloud import firestore  # For type hinting and .exists attribute
@@ -17,6 +20,10 @@ from config import (
     storage_client,
 )
 
+# Initialize Firebase Admin SDK if not already initialized
+if not firebase_admin._apps:
+    cred = credentials.ApplicationDefault()
+    firebase_admin.initialize_app(cred)
 
 @functions_framework.http
 def upload_image(request: Request) -> Response | Tuple[str, int]:
@@ -33,6 +40,20 @@ def upload_image(request: Request) -> Response | Tuple[str, int]:
         print("Error: BUCKET_NAME environment variable is not set.")
         return ("Server configuration error.", HTTPStatus.INTERNAL_SERVER_ERROR)
 
+    auth_header = request.headers.get("Authorization")
+
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return "Missing or invalid Authorization header", HTTPStatus.UNAUTHORIZED
+
+    id_token = auth_header.split("Bearer ")[1]
+
+    try:
+        decoded_token = auth.verify_id_token(id_token)
+        user_id = decoded_token["uid"]
+    except Exception as e:
+        print(f"Token verification failed: {e}")
+        return "Unauthorized", HTTPStatus.UNAUTHORIZED
+    
     image_file: Union[FileStorage, None] = request.files.get("image")
 
     if not image_file:
@@ -59,6 +80,17 @@ def upload_image(request: Request) -> Response | Tuple[str, int]:
         blob = bucket.blob(destination_blob_name)
 
         blob.upload_from_file(image_file.stream, content_type=image_file.mimetype)
+        # Lưu Firestore metadata có userId
+        doc_id = destination_blob_name.replace("/", "_")
+        metadata = {
+            "bucket": bucket_name,
+            "fileName": destination_blob_name,
+            "imageUri": f"gs://{bucket_name}/{destination_blob_name}",
+            "userId": user_id,
+            "uploadedTimestamp": firestore.SERVER_TIMESTAMP,
+        }
+
+        firestore_client.collection(FIRESTORE_COLLECTION).document(doc_id).set(metadata)
 
         return (
             f"File '{filename}' uploaded successfully as '{destination_blob_name}'.",
@@ -81,10 +113,21 @@ def get_images_metadata(_: Request) -> Response | Tuple[str, int]:
 
     Returns a JSON response containing a list of image metadata objects.
     """
+    id_token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if not id_token:
+        return "Missing Authorization header", HTTPStatus.UNAUTHORIZED
+
+    try:
+        decoded_token = auth.verify_id_token(id_token)
+        user_id = decoded_token["uid"]
+    except Exception as e:
+        print(f"Token verification failed: {e}")
+        return "Unauthorized", HTTPStatus.UNAUTHORIZED
+
     images_data: list[dict[str, Any]] = []
 
     try:
-        docs = firestore_client.collection(FIRESTORE_COLLECTION).stream()
+        docs = firestore_client.collection(FIRESTORE_COLLECTION).where("userId", "==", user_id).stream()
 
         for doc in docs:
             metadata = doc.to_dict()
