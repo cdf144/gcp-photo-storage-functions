@@ -8,6 +8,22 @@ gcloud run deploy upload-image-function \
   --set-env-vars BUCKET_NAME="photo-cloud-storage-bucket-1" \
   --allow-unauthenticated
 
+gcloud run deploy update-image-function \
+  --source . \
+  --base-image python313 \
+  --region asia-southeast1 \
+  --function update_image \
+  --set-env-vars BUCKET_NAME="photo-cloud-storage-bucket-1" \
+  --allow-unauthenticated
+
+gcloud run deploy delete-image-function \
+  --source . \
+  --base-image python313 \
+  --region asia-southeast1 \
+  --function delete_image \
+  --set-env-vars BUCKET_NAME="photo-cloud-storage-bucket-1" \
+  --allow-unauthenticated
+
 gcloud run deploy get-images-metadata-function \
   --source . \
   --base-image python313 \
