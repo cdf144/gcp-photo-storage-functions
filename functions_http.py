@@ -6,12 +6,13 @@ from typing import Any, Tuple, Union
 import firebase_admin
 from firebase_admin import auth, credentials
 
-import functions_framework
+from flask_cors import CORS
+from functions_framework import http
 from flask import Request, Response, jsonify
 from google.cloud import firestore  # For type hinting and .exists attribute
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
-
+from flask import make_response
 import utils
 from config import (
     BUCKET_SIGNED_URL_EXPIRATION,
@@ -21,11 +22,51 @@ from config import (
 )
 
 # Initialize Firebase Admin SDK if not already initialized
-if not firebase_admin._apps:
-    cred = credentials.ApplicationDefault()
-    firebase_admin.initialize_app(cred)
 
-@functions_framework.http
+if not firebase_admin._apps:
+    cred = credentials.Certificate("imagestorageauth-firebase-adminsdk-fbsvc-e9eb1cbf31.json")
+    firebase_admin.initialize_app(cred, {
+        'projectId': 'imagestorageauth',
+    })
+
+cors = CORS(resources={r"/.*": {"origins": "http://localhost:5173"}})
+
+# Middleware CORS
+def cors_middleware(func):
+    def wrapper(request: Request):
+        if request.method == "OPTIONS":
+            response = make_response(jsonify({"status": "success", "message": "Preflight request handled"}), 200)
+            response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+            response.headers["Access-Control-Max-Age"] = "86400"
+            return response
+
+        result = func(request)
+
+        # Đảm bảo thêm header CORS cho mọi phản hồi
+        if isinstance(result, tuple) and len(result) == 2:
+            response, status = result
+            if isinstance(response, str):
+                response = jsonify({"message": response})
+            elif not isinstance(response, Response):
+                response = make_response(jsonify(response))
+            response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
+            return response, status
+        elif isinstance(result, (str, dict, list)):
+            response = make_response(jsonify(result))
+            response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
+            return response, 200
+        elif isinstance(result, Response):
+            result.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
+            return result
+
+        return result
+    return wrapper
+
+
+@http
+@cors_middleware
 def upload_image(request: Request) -> Response | Tuple[str, int]:
     """
     HTTP Cloud Run function to receive an image via POST request
@@ -79,7 +120,11 @@ def upload_image(request: Request) -> Response | Tuple[str, int]:
         bucket = storage_client.get_bucket(bucket_name)
         blob = bucket.blob(destination_blob_name)
 
+                
+        blob.metadata = {"userId": user_id}
         blob.upload_from_file(image_file.stream, content_type=image_file.mimetype)
+        blob.patch()
+        
         # Lưu Firestore metadata có userId
         doc_id = destination_blob_name.replace("/", "_")
         metadata = {
@@ -89,7 +134,7 @@ def upload_image(request: Request) -> Response | Tuple[str, int]:
             "userId": user_id,
             "uploadedTimestamp": firestore.SERVER_TIMESTAMP,
         }
-
+        print(f"Metadata: {metadata}")
         firestore_client.collection(FIRESTORE_COLLECTION).document(doc_id).set(metadata)
 
         return (
@@ -105,8 +150,9 @@ def upload_image(request: Request) -> Response | Tuple[str, int]:
         )
 
 
-@functions_framework.http
-def get_images_metadata(_: Request) -> Response | Tuple[str, int]:
+@http
+@cors_middleware
+def get_images_metadata(request: Request) -> Response | Tuple[str, int]:
     """
     HTTP Cloud Run function to retrieve image metadata and labels from Firestore
     and generate signed URLs for corresponding images in Cloud Storage.
@@ -180,7 +226,8 @@ def get_images_metadata(_: Request) -> Response | Tuple[str, int]:
         )
 
 
-@functions_framework.http
+@http
+@cors_middleware
 def get_image_metadata(request: Request) -> Response | Tuple[str, int]:
     """
     HTTP Cloud Run function to retrieve metadata for a specific image

@@ -1,15 +1,26 @@
 import datetime
 from typing import Any, Union
-
+import time
 import functions_framework
-from google.cloud import firestore, vision
 
+import firebase_admin
+from firebase_admin import credentials
+
+from google.cloud import firestore, vision
+from flask_cors import CORS, cross_origin
 from config import (
     FIRESTORE_COLLECTION,
     firestore_client,
     vision_client,
+    storage_client
 )
 
+# Initialize Firebase Admin SDK only once
+if not firebase_admin._apps:
+    cred = credentials.Certificate("imagestorageauth-firebase-adminsdk-fbsvc-e9eb1cbf31.json")
+    firebase_admin.initialize_app(cred, {
+        'projectId': 'imagestorageauth',
+    })
 
 @functions_framework.cloud_event
 def process_image_for_labels(cloud_event: functions_framework.CloudEvent) -> None:
@@ -26,14 +37,15 @@ def process_image_for_labels(cloud_event: functions_framework.CloudEvent) -> Non
 
     event_id = attributes.get("id")
     event_type = attributes.get("type")
-
+    print("data", data)
+    print("attributes", attributes)
     bucket_name: str | None = data.get("bucket")
     file_name: str | None = data.get("name")
     metageneration: str | None = data.get("metageneration")
     time_created: str | None = data.get("timeCreated")
     updated: str | None = data.get("updated")
     size: str | None = data.get("size")
-
+    
     print(
         f"Event ID: {event_id}, Event type: {event_type}, Bucket: {bucket_name}, File: {file_name}, Metageneration: {metageneration}"
     )
@@ -74,6 +86,18 @@ def process_image_for_labels(cloud_event: functions_framework.CloudEvent) -> Non
     except Exception as e:
         print(f"An error occurred during Vision API processing: {e}")
 
+    # Lấy userId từ metadata của file trong GCS
+    userId = None
+    try:
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(file_name)
+        blob.reload()
+        if blob.metadata and "userId" in blob.metadata:
+            userId = blob.metadata["userId"]
+        print(f"Retrieved userId from GCS metadata: {userId}")
+    except Exception as e:
+        print(f"Could not fetch userId from blob metadata: {e}")
+
     metadata: dict[str, Any] = {
         "bucket": bucket_name,
         "fileName": file_name,
@@ -85,6 +109,9 @@ def process_image_for_labels(cloud_event: functions_framework.CloudEvent) -> Non
         if response and response.error and response.error.message
         else None,
     }
+
+    if userId:
+        metadata["userId"] = userId
 
     try:
         if time_created:
@@ -104,7 +131,7 @@ def process_image_for_labels(cloud_event: functions_framework.CloudEvent) -> Non
         doc_ref: firestore.DocumentReference = firestore_client.collection(
             FIRESTORE_COLLECTION
         ).document(doc_id)
-        doc_ref.set(metadata)
+        doc_ref.set(metadata, merge=True)
 
     except Exception as e:
         print(f"An error occurred while saving to Firestore: {e}")
