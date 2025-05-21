@@ -46,7 +46,7 @@ def process_image_for_labels(cloud_event: functions_framework.CloudEvent) -> Non
 
     image = vision.Image(source=vision.ImageSource(image_uri=image_uri))
     labels_data: list[dict[str, Union[str, float]]] = []
-    response = None  # Initialize response
+    response = None
 
     try:
         response = vision_client.label_detection(image=image)

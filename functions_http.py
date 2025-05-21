@@ -4,13 +4,10 @@ from http import HTTPStatus
 from typing import Any, Tuple, Union
 
 import firebase_admin
-from firebase_admin import auth, credentials
-from google.cloud import firestore, vision
-from google.cloud.vision_v1 import types
-
 import functions_framework
+from firebase_admin import auth, credentials
 from flask import Request, Response, jsonify
-from google.cloud import firestore  # For type hinting and .exists attribute
+from google.cloud import firestore
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
@@ -27,22 +24,7 @@ if not firebase_admin._apps:
     cred = credentials.ApplicationDefault()
     firebase_admin.initialize_app(cred)
 
-def perform_ocr(bucket_name: str, file_name: str) -> str:
-    try:
-        client = vision.ImageAnnotatorClient()
-        image = types.Image()
-        image.source.image_uri = f"gs://{bucket_name}/{file_name}"
-        
-        response = client.text_detection(image=image)
-        texts = response.text_annotations
-        
-        if texts:
-            return texts[0].description  # Lấy văn bản đầy đủ từ kết quả OCR
-        return ""
-    except Exception as e:
-        print(f"Lỗi khi thực hiện OCR trên {file_name}: {e}")
-        return ""
-    
+
 @functions_framework.http
 def upload_image(request: Request) -> Response | Tuple[str, int]:
     """
@@ -66,12 +48,12 @@ def upload_image(request: Request) -> Response | Tuple[str, int]:
     id_token = auth_header.split("Bearer ")[1]
 
     try:
-        decoded_token = auth.verify_id_token(id_token)
-        user_id = decoded_token["uid"]
+        decoded_token: dict[str, Any] = auth.verify_id_token(id_token)
+        user_id: str = decoded_token["uid"]
     except Exception as e:
         print(f"Token verification failed: {e}")
         return "Unauthorized", HTTPStatus.UNAUTHORIZED
-    
+
     image_file: Union[FileStorage, None] = request.files.get("image")
 
     if not image_file:
@@ -97,8 +79,7 @@ def upload_image(request: Request) -> Response | Tuple[str, int]:
         bucket = storage_client.get_bucket(bucket_name)
         blob = bucket.blob(destination_blob_name)
         blob.upload_from_file(image_file.stream, content_type=image_file.mimetype)
-        # Lưu Firestore metadata có userId
-        ocr_text = perform_ocr(bucket_name, destination_blob_name)
+        ocr_text = utils.perform_ocr(bucket_name, destination_blob_name)
         doc_id = destination_blob_name.replace("/", "_")
         metadata = {
             "bucket": bucket_name,
@@ -122,7 +103,8 @@ def upload_image(request: Request) -> Response | Tuple[str, int]:
             "An error occurred during file upload.",
             HTTPStatus.INTERNAL_SERVER_ERROR,
         )
-        
+
+
 @functions_framework.http
 def update_image(request: Request) -> Response | Tuple[str, int]:
     """
@@ -172,7 +154,6 @@ def update_image(request: Request) -> Response | Tuple[str, int]:
         if metadata.get("userId") != user_id:
             return ("Bạn không có quyền cập nhật ảnh này.", HTTPStatus.FORBIDDEN)
 
-        # Xóa tệp cũ trong Cloud Storage
         old_file_name = metadata.get("fileName")
         if old_file_name:
             bucket = storage_client.get_bucket(bucket_name)
@@ -180,7 +161,6 @@ def update_image(request: Request) -> Response | Tuple[str, int]:
             if old_blob.exists():
                 old_blob.delete()
 
-        # Tải lên tệp mới
         filename = image_file.filename or "updated_file"
         safe_filename = secure_filename(filename)
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
@@ -190,17 +170,15 @@ def update_image(request: Request) -> Response | Tuple[str, int]:
         blob = bucket.blob(destination_blob_name)
         blob.upload_from_file(image_file.stream, content_type=image_file.mimetype)
 
-        # Thực hiện OCR
-        ocr_text = perform_ocr(bucket_name, destination_blob_name)
+        ocr_text = utils.perform_ocr(bucket_name, destination_blob_name)
 
-        # Cập nhật metadata
         updated_metadata = {
             "bucket": bucket_name,
             "fileName": destination_blob_name,
             "imageUri": f"gs://{bucket_name}/{destination_blob_name}",
             "userId": user_id,
             "uploadedTimestamp": firestore.SERVER_TIMESTAMP,
-            "ocrText": ocr_text,  # Thêm văn bản OCR
+            "ocrText": ocr_text,
         }
 
         doc_ref.set(updated_metadata)
@@ -216,6 +194,7 @@ def update_image(request: Request) -> Response | Tuple[str, int]:
             "Lỗi xảy ra khi cập nhật tệp.",
             HTTPStatus.INTERNAL_SERVER_ERROR,
         )
+
 
 @functions_framework.http
 def delete_image(request: Request) -> Response | Tuple[str, int]:
@@ -265,7 +244,6 @@ def delete_image(request: Request) -> Response | Tuple[str, int]:
             if blob.exists():
                 blob.delete()
 
-        # Xóa tài liệu từ Firestore
         doc_ref.delete()
 
         return (
@@ -282,7 +260,7 @@ def delete_image(request: Request) -> Response | Tuple[str, int]:
 
 
 @functions_framework.http
-def get_images_metadata(_: Request) -> Response | Tuple[str, int]:
+def get_images_metadata(request: Request) -> Response | Tuple[str, int]:
     """
     HTTP Cloud Run function to retrieve image metadata and labels from Firestore
     and generate signed URLs for corresponding images in Cloud Storage.
@@ -303,7 +281,11 @@ def get_images_metadata(_: Request) -> Response | Tuple[str, int]:
     images_data: list[dict[str, Any]] = []
 
     try:
-        docs = firestore_client.collection(FIRESTORE_COLLECTION).where("userId", "==", user_id).stream()
+        docs = (
+            firestore_client.collection(FIRESTORE_COLLECTION)
+            .where("userId", "==", user_id)
+            .stream()
+        )
 
         for doc in docs:
             metadata = doc.to_dict()
