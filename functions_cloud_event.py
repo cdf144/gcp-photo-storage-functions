@@ -3,12 +3,9 @@ from typing import Any, Union
 
 import functions_framework
 from google.cloud import firestore, vision
+from google.cloud.vision import AnnotateImageResponse
 
-from config import (
-    FIRESTORE_COLLECTION,
-    firestore_client,
-    vision_client,
-)
+from config import FIRESTORE_COLLECTION, firestore_client, vision_client
 
 
 @functions_framework.cloud_event
@@ -26,7 +23,6 @@ def process_image_upload_labels(cloud_event: functions_framework.CloudEvent) -> 
 
     event_id = attributes.get("id")
     event_type = attributes.get("type")
-
     bucket_name: str | None = data.get("bucket")
     file_name: str | None = data.get("name")
     metageneration: str | None = data.get("metageneration")
@@ -49,7 +45,7 @@ def process_image_upload_labels(cloud_event: functions_framework.CloudEvent) -> 
     response = None
 
     try:
-        response = vision_client.label_detection(image=image)
+        response: AnnotateImageResponse = vision_client.label_detection(image=image)
         labels = response.label_annotations
 
         if labels:

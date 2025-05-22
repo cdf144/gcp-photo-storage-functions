@@ -3,11 +3,11 @@ import os
 from http import HTTPStatus
 from typing import Any, Tuple
 
-import firebase_admin
 import functions_framework
-from firebase_admin import auth, credentials
-from flask import Request, Response, jsonify
-from google.cloud import firestore, vision
+from firebase_admin import auth
+from flask import Request, Response, jsonify, make_response
+from flask_cors import CORS
+from google.cloud import firestore
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
@@ -17,15 +17,53 @@ from config import (
     FIRESTORE_COLLECTION,
     firestore_client,
     storage_client,
-    vision_client,
 )
 
-# Initialize Firebase Admin SDK if not already initialized
-if not firebase_admin._apps:
-    cred = credentials.ApplicationDefault()
-    firebase_admin.initialize_app(cred)
+cors = CORS(resources={r"/.*": {"origins": "*"}})
 
 
+def cors_middleware(func):
+    def wrapper(request: Request) -> Response | Tuple[str, int]:
+        if request.method == "OPTIONS":
+            response = make_response(
+                jsonify({"status": "success", "message": "Preflight request handled"}),
+                200,
+            )
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Methods"] = (
+                "GET, POST, DELETE, OPTIONS"
+            )
+            response.headers["Access-Control-Allow-Headers"] = (
+                "Authorization, Content-Type"
+            )
+            response.headers["Access-Control-Max-Age"] = "86400"
+            return response
+
+        result = func(request)
+
+        # Ensure CORS headers are set for all responses
+        if isinstance(result, tuple) and len(result) == 2:
+            response, status = result
+            if isinstance(response, str):
+                response = jsonify({"message": response})
+            elif not isinstance(response, Response):
+                response = make_response(jsonify(response))
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response, status
+        elif isinstance(result, (str, dict, list)):
+            response = make_response(jsonify(result))
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response, 200
+        elif isinstance(result, Response):
+            result.headers["Access-Control-Allow-Origin"] = "*"
+            return result
+
+        return result
+
+    return wrapper
+
+
+@cors_middleware
 @functions_framework.http
 def upload_image(request: Request) -> Response | Tuple[str, int]:
     """
@@ -35,6 +73,11 @@ def upload_image(request: Request) -> Response | Tuple[str, int]:
     Expects a file field named 'image' in the request.
     The target bucket name is specified in the BUCKET_NAME environment variable.
     """
+    if request.method != "POST":
+        return (
+            "This endpoint only accepts POST requests.",
+            HTTPStatus.METHOD_NOT_ALLOWED,
+        )
 
     bucket_name: str = os.environ.get("BUCKET_NAME", "")
     if not bucket_name:
@@ -79,7 +122,10 @@ def upload_image(request: Request) -> Response | Tuple[str, int]:
     try:
         bucket = storage_client.get_bucket(bucket_name)
         blob = bucket.blob(destination_blob_name)
+        blob.metadata = {"userId": user_id}
         blob.upload_from_file(image_file.stream, content_type=image_file.mimetype)
+        blob.patch()
+
         doc_id = destination_blob_name.replace("/", "_")
         metadata = {
             "bucket": bucket_name,
@@ -104,6 +150,7 @@ def upload_image(request: Request) -> Response | Tuple[str, int]:
         )
 
 
+@cors_middleware
 @functions_framework.http
 def delete_image(request: Request) -> Response | Tuple[str, int]:
     """
@@ -114,6 +161,12 @@ def delete_image(request: Request) -> Response | Tuple[str, int]:
     The image metadata in Firestore will be deleted by a separate Cloud Event function
     triggered by the GCS object deletion.
     """
+    if request.method != "DELETE":
+        return (
+            "This endpoint only accepts DELETE requests.",
+            HTTPStatus.METHOD_NOT_ALLOWED,
+        )
+
     bucket_name: str = os.environ.get("BUCKET_NAME", "")
     if not bucket_name:
         print("Error: BUCKET_NAME environment variable is not set.")
@@ -134,7 +187,7 @@ def delete_image(request: Request) -> Response | Tuple[str, int]:
     file_name: str | None = request.args.get("fileName")
     if not file_name:
         return (
-            "Bad Request: Missing 'file_name' query parameter.",
+            "Bad Request: Missing 'fileName' query parameter.",
             HTTPStatus.BAD_REQUEST,
         )
 
@@ -177,6 +230,7 @@ def delete_image(request: Request) -> Response | Tuple[str, int]:
         )
 
 
+@cors_middleware
 @functions_framework.http
 def get_images_metadata(request: Request) -> Response | Tuple[str, int]:
     """
@@ -262,15 +316,15 @@ def get_image_metadata(request: Request) -> Response | Tuple[str, int]:
     HTTP Cloud Run function to retrieve metadata for a specific image
     from Firestore based on the provided 'doc_id' query parameter.
 
-    Expects a query parameter 'doc_id' in the request URL.
+    Expects a query parameter 'docId' in the request URL.
 
     Returns a JSON response containing the image metadata.
     """
-    doc_id: str | None = request.args.get("doc_id")
+    doc_id: str | None = request.args.get("docId")
 
     if not doc_id:
         return (
-            "Bad Request: Missing 'doc_id' query parameter.",
+            "Bad Request: Missing 'docId' query parameter.",
             HTTPStatus.BAD_REQUEST,
         )
 
@@ -320,51 +374,5 @@ def get_image_metadata(request: Request) -> Response | Tuple[str, int]:
         print(f"An error occurred while retrieving metadata for {doc_id}: {e}")
         return (
             "An internal error occurred while fetching image data.",
-            HTTPStatus.INTERNAL_SERVER_ERROR,
-        )
-
-
-@functions_framework.http
-def ocr_image(request: Request) -> Response | Tuple[str, int]:
-    """
-    HTTP Cloud Run function to perform OCR on an image file
-    and return the extracted text.
-
-    Expects a file field named 'image' in the request.
-    """
-    image_file: FileStorage | None = request.files.get("image")
-
-    if not image_file:
-        return (
-            "Bad Request: Missing 'image' field in the request.",
-            HTTPStatus.BAD_REQUEST,
-        )
-
-    allowed_types = ["image/jpeg", "image/png", "image/gif"]
-    if image_file.mimetype not in allowed_types:
-        return (
-            f"Unsupported file type {image_file.mimetype}",
-            HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
-        )
-
-    try:
-        image = vision.Image(content=image_file.stream.read())
-        response = vision_client.text_detection(image=image)
-        if response and response.error and response.error.message:
-            print(f"Vision API error during OCR: {response.error.message}")
-            return (
-                f"Error during OCR processing: {response.error.message}",
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-            )
-
-        ocr_text = (
-            response.full_text_annotation.text if response.full_text_annotation else ""
-        )
-        return jsonify({"ocrText": ocr_text})
-
-    except Exception as e:
-        print(f"An error occurred during OCR: {e}")
-        return (
-            "An internal error occurred during OCR processing.",
             HTTPStatus.INTERNAL_SERVER_ERROR,
         )
