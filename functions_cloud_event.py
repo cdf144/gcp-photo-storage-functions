@@ -12,7 +12,7 @@ from config import (
 
 
 @functions_framework.cloud_event
-def process_image_for_labels(cloud_event: functions_framework.CloudEvent) -> None:
+def process_image_upload_labels(cloud_event: functions_framework.CloudEvent) -> None:
     """
     Cloud Storage event-triggered Cloud Function that processes a new image
     uploaded to a bucket using the Vision API for label detection and saves
@@ -111,7 +111,7 @@ def process_image_for_labels(cloud_event: functions_framework.CloudEvent) -> Non
 
 
 @functions_framework.cloud_event
-def delete_image_metadata(cloud_event: functions_framework.CloudEvent) -> None:
+def process_image_deletion(cloud_event: functions_framework.CloudEvent) -> None:
     """
     Cloud Storage event-triggered Cloud Function that deletes the corresponding
     Firestore document when an image is deleted from the bucket.

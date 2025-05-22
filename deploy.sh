@@ -43,17 +43,17 @@ gcloud run deploy ocr-image-function \
   --allow-unauthenticated
 
 # Default bucket trigger event is google.cloud.storage.object.v1.finalized
-gcloud functions deploy process-image-for-labels \
+gcloud functions deploy process-image-upload-labels \
   --runtime python313 \
   --region asia-southeast1 \
-  --entry-point process_image_for_labels \
+  --entry-point process_image_upload_labels \
   --set-env-vars FIRESTORE_DATABASE="photo-cloud-storage-firestore" \
   --trigger-bucket photo-cloud-storage-bucket-1
 
-gcloud functions deploy delete-image-metadata \
+gcloud functions deploy process-image-deletion \
   --runtime python313 \
   --region asia-southeast1 \
-  --entry-point delete_image_metadata \
+  --entry-point process_image_deletion \
   --set-env-vars FIRESTORE_DATABASE="photo-cloud-storage-firestore" \
   --trigger-event google.cloud.storage.object.v1.deleted \
   --trigger-resource photo-cloud-storage-bucket-1

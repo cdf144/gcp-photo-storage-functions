@@ -1,6 +1,6 @@
 from functions_cloud_event import (  # noqa: F401
-    delete_image_metadata,
-    process_image_for_labels,
+    process_image_deletion,
+    process_image_upload_labels,
 )
 from functions_http import (  # noqa: F401
     delete_image,
