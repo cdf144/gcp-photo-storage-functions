@@ -1,13 +1,13 @@
 import datetime
 import os
 from http import HTTPStatus
-from typing import Any, Tuple, Union
+from typing import Any, Tuple
 
 import firebase_admin
 import functions_framework
 from firebase_admin import auth, credentials
 from flask import Request, Response, jsonify
-from google.cloud import firestore
+from google.cloud import firestore, vision
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
@@ -17,6 +17,7 @@ from config import (
     FIRESTORE_COLLECTION,
     firestore_client,
     storage_client,
+    vision_client,
 )
 
 # Initialize Firebase Admin SDK if not already initialized
@@ -54,7 +55,7 @@ def upload_image(request: Request) -> Response | Tuple[str, int]:
         print(f"Token verification failed: {e}")
         return "Unauthorized", HTTPStatus.UNAUTHORIZED
 
-    image_file: Union[FileStorage, None] = request.files.get("image")
+    image_file: FileStorage | None = request.files.get("image")
 
     if not image_file:
         return (
@@ -79,7 +80,6 @@ def upload_image(request: Request) -> Response | Tuple[str, int]:
         bucket = storage_client.get_bucket(bucket_name)
         blob = bucket.blob(destination_blob_name)
         blob.upload_from_file(image_file.stream, content_type=image_file.mimetype)
-        ocr_text = utils.perform_ocr(bucket_name, destination_blob_name)
         doc_id = destination_blob_name.replace("/", "_")
         metadata = {
             "bucket": bucket_name,
@@ -87,7 +87,6 @@ def upload_image(request: Request) -> Response | Tuple[str, int]:
             "imageUri": f"gs://{bucket_name}/{destination_blob_name}",
             "userId": user_id,
             "uploadedTimestamp": firestore.SERVER_TIMESTAMP,
-            "ocrText": ocr_text,
         }
 
         firestore_client.collection(FIRESTORE_COLLECTION).document(doc_id).set(metadata)
@@ -129,7 +128,7 @@ def update_image(request: Request) -> Response | Tuple[str, int]:
         return "Không được ủy quyền", HTTPStatus.UNAUTHORIZED
 
     doc_id: str | None = request.form.get("doc_id")
-    image_file: Union[FileStorage, None] = request.files.get("image")
+    image_file: FileStorage | None = request.files.get("image")
 
     if not doc_id or not image_file:
         return (
@@ -170,15 +169,12 @@ def update_image(request: Request) -> Response | Tuple[str, int]:
         blob = bucket.blob(destination_blob_name)
         blob.upload_from_file(image_file.stream, content_type=image_file.mimetype)
 
-        ocr_text = utils.perform_ocr(bucket_name, destination_blob_name)
-
         updated_metadata = {
             "bucket": bucket_name,
             "fileName": destination_blob_name,
             "imageUri": f"gs://{bucket_name}/{destination_blob_name}",
             "userId": user_id,
             "uploadedTimestamp": firestore.SERVER_TIMESTAMP,
-            "ocrText": ocr_text,
         }
 
         doc_ref.set(updated_metadata)
@@ -293,7 +289,7 @@ def get_images_metadata(request: Request) -> Response | Tuple[str, int]:
 
             file_name: str | None = metadata.get("fileName")
             bucket_name: str | None = metadata.get("bucket")
-            labels: list[dict[str, Union[str, float]]] = metadata.get("labels", [])
+            labels: list[dict[str, str | float]] = metadata.get("labels", [])
 
             if not file_name or not bucket_name:
                 print(
@@ -402,5 +398,51 @@ def get_image_metadata(request: Request) -> Response | Tuple[str, int]:
         print(f"An error occurred while retrieving metadata for {doc_id}: {e}")
         return (
             "An internal error occurred while fetching image data.",
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
+
+
+@functions_framework.http
+def ocr_image(request: Request) -> Response | Tuple[str, int]:
+    """
+    HTTP Cloud Run function to perform OCR on an image file
+    and return the extracted text.
+
+    Expects a file field named 'image' in the request.
+    """
+    image_file: FileStorage | None = request.files.get("image")
+
+    if not image_file:
+        return (
+            "Bad Request: Missing 'image' field in the request.",
+            HTTPStatus.BAD_REQUEST,
+        )
+
+    allowed_types = ["image/jpeg", "image/png", "image/gif"]
+    if image_file.mimetype not in allowed_types:
+        return (
+            f"Unsupported file type {image_file.mimetype}",
+            HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+        )
+
+    try:
+        image = vision.Image(content=image_file.stream.read())
+        response = vision_client.text_detection(image=image)
+        if response and response.error and response.error.message:
+            print(f"Vision API error during OCR: {response.error.message}")
+            return (
+                f"Error during OCR processing: {response.error.message}",
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+
+        ocr_text = (
+            response.full_text_annotation.text if response.full_text_annotation else ""
+        )
+        return jsonify({"ocrText": ocr_text})
+
+    except Exception as e:
+        print(f"An error occurred during OCR: {e}")
+        return (
+            "An internal error occurred during OCR processing.",
             HTTPStatus.INTERNAL_SERVER_ERROR,
         )

@@ -5,5 +5,6 @@ from functions_cloud_event import (  # noqa: F401
 from functions_http import (  # noqa: F401
     get_image_metadata,
     get_images_metadata,
+    ocr_image,
     upload_image,
 )

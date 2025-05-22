@@ -42,6 +42,13 @@ gcloud run deploy get-image-metadata-function \
   --set-env-vars BUCKET_NAME="photo-cloud-storage-bucket-1" \
   --allow-unauthenticated
 
+gcloud run deploy ocr-image-function \
+  --source . \
+  --base-image python313 \
+  --region asia-southeast1 \
+  --function ocr_image \
+  --allow-unauthenticated
+
 # Default bucket trigger event is google.cloud.storage.object.v1.finalized
 gcloud functions deploy process-image-for-labels \
   --runtime python313 \

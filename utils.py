@@ -3,9 +3,6 @@ import datetime
 import google.auth.credentials
 import google.auth.impersonated_credentials
 import google.auth.transport.requests
-from google.cloud import vision
-
-from config import vision_client
 
 
 def get_impersonated_credentials() -> google.auth.credentials.Credentials:
@@ -34,23 +31,3 @@ def get_impersonated_credentials() -> google.auth.credentials.Credentials:
         lifetime=datetime.timedelta(seconds=3600),
         delegates=[credentials.service_account_email],
     )
-
-
-def perform_ocr(bucket_name: str, file_name: str) -> str:
-    image_uri = f"gs://{bucket_name}/{file_name}"
-
-    image = vision.Image(source=vision.ImageSource(image_uri=image_uri))
-    text = ""
-
-    try:
-        response = vision_client.text_detection(image=image)
-        texts = response.text_annotations
-
-        if texts:
-            text = texts[0].description
-        else:
-            print("No text found in the image.")
-    except Exception as e:
-        print(f"An error occurred during OCR processing: {e}")
-
-    return text
