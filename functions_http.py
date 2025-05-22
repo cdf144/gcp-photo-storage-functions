@@ -24,9 +24,9 @@ from config import (
 # Initialize Firebase Admin SDK if not already initialized
 
 if not firebase_admin._apps:
-    cred = credentials.Certificate("imagestorageauth-firebase-adminsdk-fbsvc-e9eb1cbf31.json")
+    cred = credentials.Certificate("photo-cloud-storage-8ee3b-firebase-adminsdk-fbsvc-810a638758.json")
     firebase_admin.initialize_app(cred, {
-        'projectId': 'imagestorageauth',
+        'projectId': 'photo-cloud-storage-8ee3b',
     })
 
 cors = CORS(resources={r"/.*": {"origins": "http://localhost:5173"}})
