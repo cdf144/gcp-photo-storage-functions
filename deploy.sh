@@ -40,6 +40,14 @@ gcloud run deploy get-image-metadata-function \
   --allow-unauthenticated \
   --timeout 180s
 
+gcloud run deploy ocr-image-function \
+  --source . \
+  --base-image python313 \
+  --region asia-southeast1 \
+  --function ocr_image \
+  --allow-unauthenticated \
+  --timeout 180s
+
 # --trigger-bucket event is google.cloud.storage.object.v1.finalized
 gcloud functions deploy process-image-upload-labels \
   --runtime python313 \

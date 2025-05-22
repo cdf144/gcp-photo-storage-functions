@@ -7,7 +7,7 @@ import functions_framework
 from firebase_admin import auth
 from flask import Request, Response, jsonify, make_response
 from flask_cors import CORS
-from google.cloud import firestore
+from google.cloud import firestore, vision
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
@@ -17,6 +17,7 @@ from config import (
     FIRESTORE_COLLECTION,
     firestore_client,
     storage_client,
+    vision_client,
 )
 
 cors = CORS(resources={r"/.*": {"origins": "*"}})
@@ -374,5 +375,65 @@ def get_image_metadata(request: Request) -> Response | Tuple[str, int]:
         print(f"An error occurred while retrieving metadata for {doc_id}: {e}")
         return (
             "An internal error occurred while fetching image data.",
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
+
+
+@functions_framework.http
+def ocr_image(request: Request) -> Response | Tuple[str, int]:
+    """
+    HTTP Cloud Run function to perform OCR on an image file
+    and return the extracted text.
+
+    Expects a file field named 'image' in the request.
+    """
+    if request.method != "POST":
+        return (
+            "This endpoint only accepts POST requests.",
+            HTTPStatus.METHOD_NOT_ALLOWED,
+        )
+
+    image_file: FileStorage | None = request.files.get("image")
+    if not image_file:
+        return (
+            "Bad Request: Missing 'image' field in the request.",
+            HTTPStatus.BAD_REQUEST,
+        )
+
+    allowed_types = ["image/jpeg", "image/png", "image/gif"]
+    if image_file.mimetype not in allowed_types:
+        return (
+            f"Unsupported file type {image_file.mimetype}",
+            HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+        )
+
+    try:
+        image = vision.Image(content=image_file.read())
+        result = vision_client.text_detection(image=image)
+        annotations = result.text_annotations[1:]
+        boxes: list[dict] = []
+        for annotation in annotations:
+            vertices = annotation.bounding_poly.vertices
+            x = vertices[0].x or 0
+            y = vertices[0].y or 0
+            width = (vertices[1].x or 0) - x
+            height = (vertices[2].y or 0) - y
+
+            boxes.append(
+                {
+                    "text": annotation.description,
+                    "x": x,
+                    "y": y,
+                    "width": width,
+                    "height": height,
+                }
+            )
+
+        return jsonify({"boxes": boxes})
+
+    except Exception as e:
+        print(f"An error occurred during ocr image: {e}")
+        return (
+            "An error occurred during file upload.",
             HTTPStatus.INTERNAL_SERVER_ERROR,
         )
