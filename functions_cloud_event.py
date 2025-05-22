@@ -104,7 +104,7 @@ def process_image_for_labels(cloud_event: functions_framework.CloudEvent) -> Non
         doc_ref: firestore.DocumentReference = firestore_client.collection(
             FIRESTORE_COLLECTION
         ).document(doc_id)
-        doc_ref.set(metadata)
+        doc_ref.set(metadata, merge=True)
 
     except Exception as e:
         print(f"An error occurred while saving to Firestore: {e}")

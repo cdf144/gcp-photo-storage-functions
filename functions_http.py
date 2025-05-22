@@ -105,152 +105,74 @@ def upload_image(request: Request) -> Response | Tuple[str, int]:
 
 
 @functions_framework.http
-def update_image(request: Request) -> Response | Tuple[str, int]:
-    """
-    API để cập nhật ảnh hiện có trong Cloud Storage và Firestore.
-    Yêu cầu doc_id và tệp image mới.
-    """
-    bucket_name: str = os.environ.get("BUCKET_NAME", "")
-    if not bucket_name:
-        print("Lỗi: Biến môi trường BUCKET_NAME chưa được thiết lập.")
-        return ("Lỗi cấu hình server.", HTTPStatus.INTERNAL_SERVER_ERROR)
-
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        return "Thiếu hoặc sai tiêu đề Authorization", HTTPStatus.UNAUTHORIZED
-
-    id_token = auth_header.split("Bearer ")[1]
-    try:
-        decoded_token = auth.verify_id_token(id_token)
-        user_id = decoded_token["uid"]
-    except Exception as e:
-        print(f"Xác minh token thất bại: {e}")
-        return "Không được ủy quyền", HTTPStatus.UNAUTHORIZED
-
-    doc_id: str | None = request.form.get("doc_id")
-    image_file: FileStorage | None = request.files.get("image")
-
-    if not doc_id or not image_file:
-        return (
-            "Yêu cầu không hợp lệ: Thiếu 'doc_id' hoặc 'image'.",
-            HTTPStatus.BAD_REQUEST,
-        )
-
-    allowed_types = ["image/jpeg", "image/png", "image/gif"]
-    if image_file.mimetype not in allowed_types:
-        return (
-            f"Loại tệp không được hỗ trợ {image_file.mimetype}",
-            HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
-        )
-
-    try:
-        doc_ref = firestore_client.collection(FIRESTORE_COLLECTION).document(doc_id)
-        doc = doc_ref.get()
-        if not doc.exists:
-            return ("Tài liệu không tồn tại.", HTTPStatus.NOT_FOUND)
-
-        metadata = doc.to_dict()
-        if metadata.get("userId") != user_id:
-            return ("Bạn không có quyền cập nhật ảnh này.", HTTPStatus.FORBIDDEN)
-
-        old_file_name = metadata.get("fileName")
-        if old_file_name:
-            bucket = storage_client.get_bucket(bucket_name)
-            old_blob = bucket.blob(old_file_name)
-            if old_blob.exists():
-                old_blob.delete()
-
-        filename = image_file.filename or "updated_file"
-        safe_filename = secure_filename(filename)
-        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-        destination_blob_name = f"uploads/{timestamp}_{safe_filename}"
-
-        bucket = storage_client.get_bucket(bucket_name)
-        blob = bucket.blob(destination_blob_name)
-        blob.upload_from_file(image_file.stream, content_type=image_file.mimetype)
-
-        updated_metadata = {
-            "bucket": bucket_name,
-            "fileName": destination_blob_name,
-            "imageUri": f"gs://{bucket_name}/{destination_blob_name}",
-            "userId": user_id,
-            "uploadedTimestamp": firestore.SERVER_TIMESTAMP,
-        }
-
-        doc_ref.set(updated_metadata)
-
-        return (
-            f"Tệp '{filename}' được cập nhật thành công dưới tên '{destination_blob_name}'.",
-            HTTPStatus.OK,
-        )
-
-    except Exception as e:
-        print(f"Lỗi khi cập nhật ảnh: {e}")
-        return (
-            "Lỗi xảy ra khi cập nhật tệp.",
-            HTTPStatus.INTERNAL_SERVER_ERROR,
-        )
-
-
-@functions_framework.http
 def delete_image(request: Request) -> Response | Tuple[str, int]:
     """
-    API để xóa ảnh từ Cloud Storage và Firestore.
-    Yêu cầu doc_id.
+    HTTP Cloud Run function to delete an image from Cloud Storage.
+    Requires Firebase Authentication and expects a 'fileName' query parameter
+    (full path of the object in the bucket, e.g., 'uploads/your_image.jpg').
+
+    The image metadata in Firestore will be deleted by a separate Cloud Event function
+    triggered by the GCS object deletion.
     """
     bucket_name: str = os.environ.get("BUCKET_NAME", "")
     if not bucket_name:
-        print("Lỗi: Biến môi trường BUCKET_NAME chưa được thiết lập.")
-        return ("Lỗi cấu hình server.", HTTPStatus.INTERNAL_SERVER_ERROR)
+        print("Error: BUCKET_NAME environment variable is not set.")
+        return ("Server configuration error.", HTTPStatus.INTERNAL_SERVER_ERROR)
 
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
-        return "Thiếu hoặc sai tiêu đề Authorization", HTTPStatus.UNAUTHORIZED
-
+        return "Missing or invalid Authorization header", HTTPStatus.UNAUTHORIZED
     id_token = auth_header.split("Bearer ")[1]
-    try:
-        decoded_token = auth.verify_id_token(id_token)
-        user_id = decoded_token["uid"]
-    except Exception as e:
-        print(f"Xác minh token thất bại: {e}")
-        return "Không được ủy quyền", HTTPStatus.UNAUTHORIZED
 
-    doc_id: str | None = request.args.get("doc_id")
-    if not doc_id:
+    try:
+        decoded_token: dict[str, Any] = auth.verify_id_token(id_token)
+        user_id: str = decoded_token["uid"]
+    except Exception as e:
+        print(f"Token verification failed: {e}")
+        return "Unauthorized", HTTPStatus.UNAUTHORIZED
+
+    file_name: str | None = request.args.get("fileName")
+    if not file_name:
         return (
-            "Yêu cầu không hợp lệ: Thiếu 'doc_id'.",
+            "Bad Request: Missing 'file_name' query parameter.",
             HTTPStatus.BAD_REQUEST,
         )
 
     try:
-        doc_ref = firestore_client.collection(FIRESTORE_COLLECTION).document(doc_id)
+        doc_id = file_name.replace("/", "_")
+        doc_ref: firestore.DocumentReference = firestore_client.collection(
+            FIRESTORE_COLLECTION
+        ).document(doc_id)
         doc = doc_ref.get()
+
         if not doc.exists:
-            return ("Tài liệu không tồn tại.", HTTPStatus.NOT_FOUND)
+            return (
+                f"File metadata for '{file_name}' not found.",
+                HTTPStatus.NOT_FOUND,
+            )
 
         metadata = doc.to_dict()
         if metadata.get("userId") != user_id:
-            return ("Bạn không có quyền xóa ảnh này.", HTTPStatus.FORBIDDEN)
+            return "Permission denied to delete this file.", HTTPStatus.FORBIDDEN
 
-        # Xóa tệp từ Cloud Storage
-        file_name = metadata.get("fileName")
-        if file_name:
-            bucket = storage_client.get_bucket(bucket_name)
-            blob = bucket.blob(file_name)
-            if blob.exists():
-                blob.delete()
+        bucket = storage_client.get_bucket(bucket_name)
+        blob = bucket.blob(file_name)
+        if not blob.exists():
+            return (
+                f"Image '{file_name}' not found in storage or already deleted.",
+                HTTPStatus.OK,
+            )
 
-        doc_ref.delete()
-
+        blob.delete()
         return (
-            f"Ảnh '{file_name}' đã được xóa thành công.",
+            f"Image '{file_name}' deleted successfully.",
             HTTPStatus.OK,
         )
 
     except Exception as e:
-        print(f"Lỗi khi xóa ảnh: {e}")
+        print(f"An error occurred during image deletion for {file_name}: {e}")
         return (
-            "Lỗi xảy ra khi xóa tệp.",
+            "An error occurred during image deletion.",
             HTTPStatus.INTERNAL_SERVER_ERROR,
         )
 
