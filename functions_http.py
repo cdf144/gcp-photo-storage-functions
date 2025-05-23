@@ -13,6 +13,7 @@ from werkzeug.utils import secure_filename
 
 import utils
 from config import (
+    ALLOWED_IMAGE_TYPES,
     BUCKET_SIGNED_URL_EXPIRATION,
     FIRESTORE_COLLECTION,
     firestore_client,
@@ -107,8 +108,7 @@ def upload_image(request: Request) -> Response | Tuple[str, int]:
             HTTPStatus.BAD_REQUEST,
         )
 
-    allowed_types = ["image/jpeg", "image/png", "image/gif"]
-    if image_file.mimetype not in allowed_types:
+    if image_file.mimetype not in ALLOWED_IMAGE_TYPES:
         return (
             f"Unsupported file type {image_file.mimetype}",
             HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
@@ -311,6 +311,7 @@ def get_images_metadata(request: Request) -> Response | Tuple[str, int]:
         )
 
 
+@cors_middleware
 @functions_framework.http
 def get_image_metadata(request: Request) -> Response | Tuple[str, int]:
     """
@@ -379,6 +380,7 @@ def get_image_metadata(request: Request) -> Response | Tuple[str, int]:
         )
 
 
+@cors_middleware
 @functions_framework.http
 def ocr_image(request: Request) -> Response | Tuple[str, int]:
     """
@@ -400,8 +402,7 @@ def ocr_image(request: Request) -> Response | Tuple[str, int]:
             HTTPStatus.BAD_REQUEST,
         )
 
-    allowed_types = ["image/jpeg", "image/png", "image/gif"]
-    if image_file.mimetype not in allowed_types:
+    if image_file.mimetype not in ALLOWED_IMAGE_TYPES:
         return (
             f"Unsupported file type {image_file.mimetype}",
             HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
